@@ -7,7 +7,8 @@ import argparse
 tf.logging.set_verbosity(tf.logging.INFO)
 
 
-def input_fn(image_paths, labels, repeat=False, shuffle=False, batch_size=1):
+def input_fn(image_paths, labels, repeat=False, shuffle=False,
+             crop=False, batch_size=1):
     dataset = tf.data.Dataset.from_tensor_slices((image_paths, labels))
     def parse_function(image_path, label):
         image_string = tf.read_file(image_path)
@@ -17,6 +18,22 @@ def input_fn(image_paths, labels, repeat=False, shuffle=False, batch_size=1):
         return {"x": image_reshaped}, label
     dataset = dataset.map(parse_function)
 
+    def crop_image(x, label):
+        cropped = tf.image.crop_and_resize(
+                tf.stack([x["x"]]),
+                np.asarray([[0.0, 0.0, 1.0, 1.0],
+                            [0.0, 0.0, 0.9, 0.9],
+                            [0.0, 0.1, 0.9, 1.0],
+                            [0.1, 0.0, 1.0, 0.9],
+                            [0.1, 0.1, 1.0, 1.0]]),
+                [0, 0, 0, 0, 0],
+                [64, 64])
+        return tf.data.Dataset.from_tensor_slices((
+                cropped, tf.stack([label] * 5)))
+
+    if crop:
+        dataset = dataset.flat_map(crop_image)
+        dataset = dataset.map(lambda x, y: ({"x" : x}, y))
     if shuffle:
         dataset = dataset.shuffle(buffer_size=1000)
     if repeat:
@@ -150,6 +167,8 @@ def main(unused_argv):
     argp = argparse.ArgumentParser()
     argp.add_argument("--max_steps", help="Max steps to train the model",
                       default=20000, type=int)
+    argp.add_argument("--crop", help="Type of the model",
+                      action="store_true")
     argp.add_argument("input", help="Directory with images and labels")
     argp.add_argument("model_type", help="Type of the model",
                       choices=["cnn1", "cnn2"])
@@ -172,7 +191,7 @@ def main(unused_argv):
     test_labels = labels[train_size:]
 
     model_name = os.path.split(os.path.normpath(args.input))[1] + "__" + \
-            args.model_type
+            args.model_type + ("__crop" if args.crop else "")
     model_dir = os.path.join("/tmp", model_name)
     model_fn = globals()[args.model_type]
     classifier = tf.estimator.Estimator(model_fn=model_fn, model_dir=model_dir)
@@ -183,7 +202,7 @@ def main(unused_argv):
 
     if args.max_steps:
         train_spec = tf.estimator.TrainSpec(input_fn=lambda: input_fn(
-                train_image_paths, train_labels, True, True, 100),
+                train_image_paths, train_labels, True, True, args.crop, 100),
                 max_steps=args.max_steps, hooks=[logging_hook])
 
         eval_spec = tf.estimator.EvalSpec(input_fn=lambda: input_fn(
