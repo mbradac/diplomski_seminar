@@ -101,12 +101,15 @@ def main():
         context.set_source_rgb(1.0, 1.0, 1.0)
         context.paint()
 
-        COLOR_CHOICES = [(1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)]
+        COLOR_CHOICES = (("red", (1.0, 0.0, 0.0)),
+                         ("green", (0.0, 1.0, 0.0)),
+                         ("blue", (0.0, 0.0, 1.0)))
         if parsed.multiple_colors:
             color = random.choice(COLOR_CHOICES)
         else:
             color = COLOR_CHOICES[0]
-        context.set_source_rgb(*color)
+        color_name, color_vector = color
+        context.set_source_rgb(*color_vector)
         geometric_shape = random.choice(list(GeometricShape))
         if geometric_shape == GeometricShape.TRIANGLE:
             draw_triangle(context)
@@ -123,7 +126,8 @@ def main():
                 parsed.output, "pic{:05d}.png".format(i)))
         with open(os.path.join(parsed.output, "shape{:05d}".format(i)), 'w') \
                 as shape_file:
-            print(GeometricShape.name(geometric_shape), file=shape_file)
+            print(color_name, GeometricShape.name(geometric_shape),
+                  file=shape_file)
 
     print("Generated {} triangles, {} rectangles, {} circles".format(
           num_triangles, num_rectangles, num_circles), file=sys.stderr)
