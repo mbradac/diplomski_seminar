@@ -7,16 +7,33 @@ import argparse
 tf.logging.set_verbosity(tf.logging.INFO)
 
 
+def parse_label(label_path):
+    with open(label_path) as label_file:
+        file_string = label_file.read().strip()
+        label_color_string, label_shape_string = file_string.split()
+        return (["red", "green", "blue"].index(label_color_string),
+                ["triangle", "rectangle", "circle"].index(
+                    label_shape_string))
+
+
 def input_fn(image_paths, labels, repeat=False, shuffle=False,
              crop=False, batch_size=1):
     dataset = tf.data.Dataset.from_tensor_slices((image_paths, labels))
-    def parse_function(image_path, label):
+
+    def prepare_label(image, label_path):
+        color, shape = tf.py_func(parse_label, [label_path],
+                                  [tf.int64, tf.int64])
+        return image, {"color": color, "shape": shape}
+
+    def prepare_image(image_path, label):
         image_string = tf.read_file(image_path)
         image_decoded = tf.image.decode_png(image_string, channels=3)
         image_floats = tf.image.convert_image_dtype(image_decoded, tf.float32)
         image_reshaped = tf.reshape(image_floats, [64, 64, 3])
         return {"x": image_reshaped}, label
-    dataset = dataset.map(parse_function)
+
+    dataset = dataset.map(prepare_label)
+    dataset = dataset.map(prepare_image)
 
     def crop_image(x, label):
         cropped = tf.image.crop_and_resize(
@@ -86,6 +103,7 @@ def _cnn(features, labels, mode, conv1_filters, conv2_filters, dense_units):
     if mode == tf.estimator.ModeKeys.PREDICT:
         return tf.estimator.EstimatorSpec(mode=mode, predictions=predictions)
 
+    labels = labels["shape"]
     loss = tf.losses.sparse_softmax_cross_entropy(labels=labels, logits=logits)
 
     if mode == tf.estimator.ModeKeys.TRAIN:
@@ -126,17 +144,12 @@ def main(unused_argv):
     label_paths = list(map(lambda path:
                            path.replace("pic", "shape").replace(".png", ""),
                            image_paths))
-    def label_path_to_shape_id(label_path):
-        with open(label_path) as label_file:
-            label_string = label_file.read().strip().split()[1]
-            return ["triangle", "rectangle", "circle"].index(label_string)
-    labels = np.asarray(list(map(label_path_to_shape_id, label_paths)),
-                        dtype=np.int32)
+
     train_size = int(len(image_paths) * 0.7)
     train_image_paths = image_paths[:train_size]
     test_image_paths = image_paths[train_size:]
-    train_labels = labels[:train_size]
-    test_labels = labels[train_size:]
+    train_label_paths = label_paths[:train_size]
+    test_label_paths = label_paths[train_size:]
 
     model_name = os.path.split(os.path.normpath(args.input))[1] + "__" + \
             args.model_type + ("__crop" if args.crop else "")
@@ -150,18 +163,20 @@ def main(unused_argv):
 
     if args.max_steps:
         train_spec = tf.estimator.TrainSpec(input_fn=lambda: input_fn(
-                train_image_paths, train_labels, True, True, args.crop, 100),
+                train_image_paths, train_label_paths,
+                True, True, args.crop, 100),
                 max_steps=args.max_steps, hooks=[logging_hook])
 
         eval_spec = tf.estimator.EvalSpec(input_fn=lambda: input_fn(
-                test_image_paths, test_labels))
+                test_image_paths, test_label_paths))
 
         tf.estimator.train_and_evaluate(classifier, train_spec, eval_spec)
 
     predict_results = classifier.predict(input_fn=lambda: input_fn(
-                    test_image_paths, test_labels))
+                    test_image_paths, test_label_paths))
     print(list(map(lambda x: (test_image_paths[x[0]], x),
-          filter(lambda x: test_labels[x[0]] != x[1]["classes"],
+          filter(lambda x: parse_label(test_label_paths[x[0]])[1] \
+                  != x[1]["classes"],
           enumerate(predict_results)))))
 
 
