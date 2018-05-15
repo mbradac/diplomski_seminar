@@ -7,7 +7,90 @@ from recognize_common import parse_label, input_fn
 tf.logging.set_verbosity(tf.logging.INFO)
 
 
-def _cnn(features, labels, mode, conv1_filters, conv2_filters, dense_units):
+def cnn_colors_multioutput(features, labels, mode):
+    input_layer = tf.reshape(features["x"], [-1, 64, 64, 3])
+
+    conv1 = tf.layers.conv2d(
+            inputs=input_layer,
+            filters=16,
+            kernel_size=[5, 5],
+            padding="same",
+            activation=tf.nn.relu)
+
+    pool1 = tf.layers.max_pooling2d(
+            inputs=conv1,
+            pool_size=[4, 4],
+            strides=[4, 4])
+
+    conv2 = tf.layers.conv2d(
+            inputs=pool1,
+            filters=32,
+            kernel_size=[5, 5],
+            padding="same",
+            activation=tf.nn.relu)
+
+    pool2 = tf.layers.max_pooling2d(
+            inputs=conv2,
+            pool_size=[2, 2],
+            strides=[2, 2])
+
+    pool2_flat = tf.reshape(pool2, [-1, 8 * 8 * 32])
+    dense = tf.layers.dense(
+            inputs=pool2_flat, units=512, activation=tf.nn.relu)
+    dropout = tf.layers.dropout(inputs=dense, rate=0.4,
+                                training=mode == tf.estimator.ModeKeys.TRAIN)
+
+    logits_color = tf.layers.dense(inputs=dropout, units=3)
+    logits_shape = tf.layers.dense(inputs=dropout, units=3)
+
+    color_class = tf.argmax(input=logits_color, axis=1)
+    shape_class = tf.argmax(input=logits_shape, axis=1)
+    predictions = {
+            "classes_color": color_class,
+            "classes_shape": shape_class,
+            "classes": color_class * 3 + shape_class,
+            "probabilities_color":
+                    tf.nn.softmax(logits_color, name="softmax_tensor_color"),
+            "probabilities_shape":
+                    tf.nn.softmax(logits_shape, name="softmax_tensor_shape"),
+    }
+
+    if mode == tf.estimator.ModeKeys.PREDICT:
+        return tf.estimator.EstimatorSpec(mode=mode, predictions=predictions)
+
+    labels_color = labels["color"]
+    labels_shape = labels["shape"]
+    combined_labels = labels_color * 3 + labels_shape
+    loss_color = tf.losses.sparse_softmax_cross_entropy(
+            labels=labels_color, logits=logits_color)
+    loss_shape = tf.losses.sparse_softmax_cross_entropy(
+            labels=labels_shape, logits=logits_shape)
+    loss = loss_color + loss_shape
+
+    if mode == tf.estimator.ModeKeys.TRAIN:
+        optimizer = tf.train.AdamOptimizer()
+        train_op = optimizer.minimize(
+                loss=loss,
+                global_step=tf.train.get_global_step())
+        return tf.estimator.EstimatorSpec(
+                mode=mode, loss=loss, train_op=train_op)
+
+    eval_metric_ops = {
+            "accuracy_color": tf.metrics.accuracy(
+                    labels=labels_color,
+                    predictions=predictions["classes_color"]),
+            "accuracy_shape": tf.metrics.accuracy(
+                    labels=labels_shape,
+                    predictions=predictions["classes_shape"]),
+            "accuracy": tf.metrics.accuracy(
+                    labels=combined_labels,
+                    predictions=predictions["classes"])}
+    return tf.estimator.EstimatorSpec(
+            mode=mode, loss=loss, eval_metric_ops=eval_metric_ops)
+
+
+def _cnn_colors(features, labels, mode, conv1_filters, conv2_filters,
+                dense_units):
     input_layer = tf.reshape(features["x"], [-1, 64, 64, 3])
 
     conv1 = tf.layers.conv2d(
@@ -40,7 +123,7 @@ def _cnn(features, labels, mode, conv1_filters, conv2_filters, dense_units):
     dropout = tf.layers.dropout(inputs=dense, rate=0.4,
                                 training=mode == tf.estimator.ModeKeys.TRAIN)
 
-    logits = tf.layers.dense(inputs=dropout, units=3)
+    logits = tf.layers.dense(inputs=dropout, units=9)
 
     predictions = {
             "classes": tf.argmax(input=logits, axis=1),
@@ -50,11 +133,11 @@ def _cnn(features, labels, mode, conv1_filters, conv2_filters, dense_units):
     if mode == tf.estimator.ModeKeys.PREDICT:
         return tf.estimator.EstimatorSpec(mode=mode, predictions=predictions)
 
-    labels = labels["shape"]
+    labels = labels["color"] * 3 + labels["shape"]
     loss = tf.losses.sparse_softmax_cross_entropy(labels=labels, logits=logits)
 
     if mode == tf.estimator.ModeKeys.TRAIN:
-        optimizer = tf.train.AdamOptimizer()
+        optimizer = tf.train.GradientDescentOptimizer(learning_rate=0.001)
         train_op = optimizer.minimize(
                 loss=loss,
                 global_step=tf.train.get_global_step())
@@ -68,12 +151,12 @@ def _cnn(features, labels, mode, conv1_filters, conv2_filters, dense_units):
             mode=mode, loss=loss, eval_metric_ops=eval_metric_ops)
 
 
-def cnn1(features, labels, mode):
-    return _cnn(features, labels, mode, 16, 32, 512)
+def cnn1_colors(features, labels, mode):
+    return _cnn_colors(features, labels, mode, 16, 32, 512)
 
 
-def cnn2(features, labels, mode):
-    return _cnn(features, labels, mode, 32, 64, 1024)
+def cnn2_colors(features, labels, mode):
+    return _cnn_colors(features, labels, mode, 32, 64, 1024)
 
 
 def main(unused_argv):
@@ -84,7 +167,8 @@ def main(unused_argv):
                       action="store_true")
     argp.add_argument("input", help="Directory with images and labels")
     argp.add_argument("model_type", help="Type of the model",
-                      choices=["cnn1", "cnn2"])
+                      choices=["cnn1_colors", "cnn2_colors",
+                               "cnn_colors_multioutput"])
     args = argp.parse_args()
 
     image_paths = glob.glob(os.path.join(args.input, "pic*"))
@@ -104,7 +188,9 @@ def main(unused_argv):
     model_fn = globals()[args.model_type]
     classifier = tf.estimator.Estimator(model_fn=model_fn, model_dir=model_dir)
 
-    tensors_to_log = {"probabilities": "softmax_tensor"}
+    # TODO: this is not working
+    tensors_to_log = {"probabilities_color": "softmax_tensor_color",
+                      "probabilities_shape": "softmax_tensor_shape"}
     logging_hook = tf.train.LoggingTensorHook(
             tensors=tensors_to_log, every_n_iter=50)
 
@@ -122,8 +208,9 @@ def main(unused_argv):
     predict_results = classifier.predict(input_fn=lambda: input_fn(
                     test_image_paths, test_label_paths))
     print(list(map(lambda x: (test_image_paths[x[0]], x),
-          filter(lambda x: parse_label(test_label_paths[x[0]])[1] \
-                  != x[1]["classes"],
+          filter(lambda x: parse_label(test_label_paths[x[0]])[0] * 3 + \
+                           parse_label(test_label_paths[x[0]])[1] != \
+                  x[1]["classes"],
           enumerate(predict_results)))))
 
 
