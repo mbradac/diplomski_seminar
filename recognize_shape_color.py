@@ -188,7 +188,6 @@ def main(unused_argv):
     model_fn = globals()[args.model_type]
     classifier = tf.estimator.Estimator(model_fn=model_fn, model_dir=model_dir)
 
-    # TODO: this is not working
     tensors_to_log = {"probabilities_color": "softmax_tensor_color",
                       "probabilities_shape": "softmax_tensor_shape"}
     logging_hook = tf.train.LoggingTensorHook(
