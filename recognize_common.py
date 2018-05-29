@@ -11,9 +11,9 @@ def parse_label(label_path):
                     label_shape_string))
 
 
-def input_fn(image_paths, labels, repeat=False, shuffle=False,
-             crop=False, batch_size=1):
-    dataset = tf.data.Dataset.from_tensor_slices((image_paths, labels))
+def input_fn(image_paths, label_paths, repeat=False, shuffle=False,
+             crop=False, flip=False, batch_size=1):
+    dataset = tf.data.Dataset.from_tensor_slices((image_paths, label_paths))
 
     def prepare_label(image, label_path):
         color, shape = tf.py_func(parse_label, [label_path],
@@ -42,8 +42,21 @@ def input_fn(image_paths, labels, repeat=False, shuffle=False,
         return tf.data.Dataset.from_tensor_slices((
                 cropped, tf.stack([label] * 5)))
 
+    def flip_image(x, label):
+        cropped = tf.image.crop_and_resize(
+                tf.stack([x["x"]]),
+                np.asarray([[0.0, 0.0, 1.0, 1.0],
+                            [0.0, 1.0, 1.0, 0.0]]),
+                [0, 0],
+                [64, 64])
+        return tf.data.Dataset.from_tensor_slices((
+                cropped, tf.stack([label] * 2)))
+
     if crop:
         dataset = dataset.flat_map(crop_image)
+        dataset = dataset.map(lambda x, y: ({"x" : x}, y))
+    if flip:
+        dataset = dataset.flat_map(flip_image)
         dataset = dataset.map(lambda x, y: ({"x" : x}, y))
     dataset = dataset.map(prepare_label)
     if shuffle:

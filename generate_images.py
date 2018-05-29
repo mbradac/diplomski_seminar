@@ -61,7 +61,8 @@ def draw_circle(context):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--count',
-                        help='Number of images to generate', default=1000)
+                        help='Number of images to generate', default=1000,
+                        type=int)
     parser.add_argument('--size',
                         help='Image dimension (width and height)', default=64)
     parser.add_argument('--output',
@@ -104,7 +105,7 @@ def main():
         context.set_source_rgb(1.0, 1.0, 1.0)
         context.paint()
 
-        num_shapes = random.randint(1, 4) if parsed.multiple_shapes else 1
+        num_shapes = random.randint(1, 3) if parsed.multiple_shapes else 1
         shapes = []
         for _ in range(num_shapes):
             COLOR_CHOICES = (("red", (1.0, 0.0, 0.0)),
